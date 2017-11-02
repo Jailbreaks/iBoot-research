@@ -1,0 +1,31 @@
+(c) @p0sixninja
+ 
+There’s a recursive stack overflow in iBoot’s HFS code if you alter the kernel path to a really deep path.
+ 
+/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z.txt uses 0x34D4 (13524) bytes of "stack". which appears to of looped 0x17(23) times, each loop pushes an extra 0x24C (588) bytes.  main reserves only 0x1C00 (7168) bytes
+ 
+main's stack starts at 0x4ff2f9f8 + 0x1c00 = 0x4ff315f8 but seems to use up to 0x4ff30530.  so we should need to extend it an extra 0x10c8 bytes to overflow it
+ 
+works on
+/a/b/c/d/e/f/g/h/file.txt
+breaks on
+/a/b/c/d/e/f/g/h/i/file.txt
+ 
+directory names are convert into unicode format, so bytes must be transliterated first into utf-16
+ 
+there's only a 0x200 byte limit of sending commands to iboot though with a 0x100 byte limit of file name
+ 
+for some reason usb is limiting the number of usb byte input to 0xFC, and then, even after manipulating the pointer to the variable name it still either saves or load only 0x100 bytes from nvram.
+ 
+I thought maybe the lower bytes of the path buffer might actually be a hfs catalog structure, but turns out it's just residual data from ReadBTreeEntry's stack overwriting the lower half of the 0x200 byte buffer
+ 
+using ascii path name which gets converted into utf-8 allows you to reach futher down the buffer since it turns every 1 byte into 2.
+ 
+problem now seems to be getting past the main task struct without bothering the task's state, inserting 0xe7 of padding should clear the path to overwrite the state variable with 2, but I'm not sure if the task switch happens before or after the area is overwritten.
+ 
+seems state is not the problem as I suspected, but the top of storage being overwritten causes the device to panic. the word is luckily in the perfect position, only 20 bytes (8 ascii chars) into the buffer
+ 
+wrong again!! got it backwards, it's not the word on top of the stack causing the panic, it's the actually pointer to the top of stack being overwritten (pointing someplace without 'stak').  
+unfortunally it's in the worse possiable position, it sits in the location of a local stack variable pointing to another pointer up in stack. 
+The only other option is to try to alter the stack offset.  luckily there's another recursive function, although i'm not quite sure what it's recursing on.  
+I suspect it's either for symbolic or hard links, or maybe even divided BTree branches.
